@@ -131,3 +131,159 @@ Key endpoints:
 | 401 Unauthorized | Check token in `~/.teamcity.conf`, ensure single quotes around token |
 | Empty log output | Use `/downloadBuildLog.html` not `/app/rest/` for logs |
 | Can't find build config ID | Run `configs` command first to list all IDs |
+
+## Doris Regression Pipeline — Log Analysis
+
+The Doris CI pipeline runs regression tests on a deployed cluster. When builds fail (especially due to BE crashes), the `diagnose` command alone is often insufficient because:
+- The build log tail is dominated by coverage upload steps, not crash info
+- Crash details (be.out, core dumps) are embedded deep inside the full build log or in a separately uploaded log archive
+
+### Step-by-step Crash Diagnosis
+
+#### Step 1: Initial Triage
+
+Start with `diagnose` to get an overview, then check if all test failures share the same root cause:
+
+```bash
+SKILL_DIR="$(dirname "$(readlink -f "$0")" 2>/dev/null || echo "$HOME/.gemini/antigravity/skills/teamcity")"
+TC="bash $SKILL_DIR/teamcity.sh"
+
+$TC diagnose <build_id>
+```
+
+If all failed tests show the same error like `No backend available as scan node` or `Connection refused`, this indicates a BE crash or startup failure — not individual test bugs.
+
+#### Step 2: Search Build Log for Crash Indicators
+
+Use `log` + `grep` to search the full build log for specific patterns. The full log is very large, so always pipe through `grep`:
+
+```bash
+# Check for ASAN errors (AddressSanitizer)
+$TC log <build_id> | grep -i -B 2 -A 30 \
+  "ASAN|AddressSanitizer|heap-buffer-overflow|use-after-free|SUMMARY:.*Sanitizer"
+
+# Check for classic crash signals
+$TC log <build_id> | grep -i -B 2 -A 10 \
+  "SIGSEGV|SIGABRT|signal|Segmentation|core dump|CHECK failed|DORIS_CHECK"
+
+# Check if BE was alive and when it died
+$TC log <build_id> | grep -i -B 2 -A 10 \
+  "be is not alive|not alive|No backend available|Connection refused.*8042"
+
+# Check core dump detection results
+$TC log <build_id> | grep -i -B 2 -A 20 \
+  "we got corename|no core dump|core is not empty|after check core|exit_flag"
+
+# Check if BE process was found dead
+$TC log <build_id> | grep -i -B 2 -A 5 \
+  "No such process|be.*pid|stop_be"
+```
+
+#### Step 3: Find and Download Log Archive
+
+Failed builds upload a log tarball to Alibaba Cloud OSS. Search for the download URL:
+
+```bash
+# Find the log archive URL
+$TC log <build_id> | grep -i "if you need fail regression log" -A 1
+
+# Also check for coredump archive URL
+$TC log <build_id> | grep -i "core file http"
+```
+
+This typically prints URLs like:
+```
+http://opensource-pipeline.oss-cn-hongkong.aliyuncs.com/regression/OpenSourcePiplineRegression_<timestamp>_<pr>_<commit>_<pipeline>.tar.gz
+```
+
+Download and extract the archive:
+```bash
+curl -sL "<log_archive_url>" -o /tmp/pipeline_log.tar.gz
+tar xzf /tmp/pipeline_log.tar.gz -C /tmp/
+```
+
+#### Step 4: Examine Key Files in the Archive
+
+The extracted archive has this structure:
+```
+<pr_id>_<commit>_<pipeline_name>/
+├── be/
+│   ├── conf/
+│   │   └── be.conf              # BE configuration — check priority_networks, ports
+│   └── log/
+│       ├── be.out               # ★ Most critical: crash stack traces appear here
+│       ├── be.INFO.log.*        # Detailed BE info log
+│       ├── be.WARNING.log.*     # BE warning/error log
+│       ├── be.gc.log.*          # JVM GC logs
+│       └── jni.log              # JNI/Java side logs
+├── fe/
+│   ├── conf/                    # FE configuration
+│   └── log/
+│       ├── fe.log               # FE main log
+│       ├── fe.warn.log          # FE warnings
+│       └── fe.out               # FE console output
+├── dmesg.txt                    # Kernel messages — check for OOM killer
+├── doris-regression-test.*.log  # Regression test runner log
+├── docker_logs/                 # Third-party container logs (hive, mysql, etc.)
+└── show_variables/              # Cluster variable dumps
+```
+
+**Key files to check, in priority order:**
+
+1. **`be/log/be.out`** — Contains crash stack traces (ASAN errors, SEGV signals, CHECK failures). Two startup sequences may appear if the pipeline restarts BE. Look for:
+   - `AddressSanitizer` errors with stack traces
+   - `SIGSEGV` / `SIGABRT` signal handlers
+   - `CHECK failed` or `DORIS_CHECK` assertion failures
+   - LSAN "Suppressions used" lines (these appear at normal process exit — if they appear without preceding crash info, the process exited cleanly or was killed externally)
+
+2. **`be/log/be.WARNING.log.*`** — Contains WARNING and ERROR level logs. Often has initialization errors.
+
+3. **`be/log/be.INFO.log.*`** — Full info log. Note: if BE was restarted, this file may only contain logs from the **second** startup (the first startup's logs get overwritten). Check the PID in log entries to distinguish startups.
+
+4. **`be/conf/be.conf`** — Check for misconfiguration:
+   - `priority_networks` — must match the network the FE/pipeline uses to reach BE
+   - Port settings (`be_port`, `heartbeat_service_port`, `webserver_port`, `brpc_port`)
+
+5. **`dmesg.txt`** — Check for OOM killer events:
+   ```bash
+   grep -i "oom\|killed\|out of memory\|doris" /tmp/<archive>/dmesg.txt
+   ```
+
+6. **`doris-regression-test.*.log`** — The regression test runner log. First few lines show connection config. Check initial errors to see if BE was already dead when tests started:
+   ```bash
+   head -50 /tmp/<archive>/doris-regression-test.*.log
+   grep -m 5 "ERROR\|not alive\|Connection refused" /tmp/<archive>/doris-regression-test.*.log
+   ```
+
+7. **`fe/log/fe.log`** — If BE reported alive but queries fail, check FE logs for backend status changes.
+
+### Common Crash Patterns
+
+| Pattern | Where to Find | Meaning |
+|---------|--------------|---------|
+| `AddressSanitizer: heap-buffer-overflow` | be.out | Memory corruption bug in BE C++ code |
+| `AddressSanitizer: use-after-free` | be.out | Dangling pointer access |
+| `SIGSEGV` / `Segmentation fault` | be.out | Null pointer or invalid memory access |
+| `CHECK failed` / `DORIS_CHECK` | be.out | Assertion failure in BE code |
+| `No backend available as scan node` | build log / regression log | BE is dead or unreachable from FE |
+| `Connection refused` to port 8042 | build log | BE HTTP server is down |
+| `kill: (PID) - No such process` | build log | BE process already died before stop |
+| `no core dump file` + clean LSAN exit | build log + be.out | BE was killed externally (OOM) or network misconfiguration |
+| `oom_kill_process` / `Out of memory` | dmesg.txt | Kernel OOM killer terminated BE |
+| LSAN Suppressions without crash trace | be.out | Clean exit — likely killed by signal or network issue, not a code bug |
+| `priority_networks=127.0.0.1/24` + `Connection refused` on external IP | be.conf + build log | BE bound to localhost but pipeline connects via external IP |
+
+### Distinguishing Code Bugs vs Infrastructure Issues
+
+**Code bug indicators:**
+- ASAN error with stack trace in be.out → points to exact source file and line
+- CHECK/DORIS_CHECK failure → assertion violated in logic
+- Crash happens reproducibly during a specific test
+
+**Infrastructure issue indicators:**
+- All tests fail with the same "BE not alive" error
+- No crash trace in be.out (clean LSAN exit)
+- `be.conf` misconfiguration (priority_networks, ports)
+- `dmesg.txt` shows OOM kill
+- BE was dead before tests even started
+- Failed tests span unrelated categories (JDBC, MTMV, CDC, auth, etc.)
