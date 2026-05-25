@@ -28,6 +28,9 @@ Use `~/.claude/skills/jira/jira.sh` for all operations:
 bash ~/.claude/skills/jira/jira.sh view CIR-19418
 bash ~/.claude/skills/jira/jira.sh search 'project = CIR AND assignee = jiangkai ORDER BY updated DESC'
 bash ~/.claude/skills/jira/jira.sh comment CIR-19418 'Comment text here'
+bash ~/.claude/skills/jira/jira.sh fix-comment DORIS-25296 \
+    'https://github.com/apache/doris/pull/62699' \
+    @/tmp/trigger.md @/tmp/cause.md @/tmp/solution.md
 bash ~/.claude/skills/jira/jira.sh create CIR Task 'Fix login bug'
 bash ~/.claude/skills/jira/jira.sh create CIR Bug 'Login fails' 'Steps to reproduce...'
 bash ~/.claude/skills/jira/jira.sh create CIR Task 'Review PR' '' zhangsan
@@ -43,6 +46,7 @@ bash ~/.claude/skills/jira/jira.sh transition CIR-19418 41 'Done!'  # Complete w
 | `view <KEY>` | Show issue details (summary, status, assignee, description, comments) |
 | `search '<JQL>'` | Search issues with JQL query (max 20 results) |
 | `comment <KEY> '<body>'` | Add a comment to an issue |
+| `fix-comment <KEY> <PR_URL> <TRIGGER> <ROOT_CAUSE> <SOLUTION>` | Post a bug-fix reply rendered with the 3-section template (see below). Any of TRIGGER/ROOT_CAUSE/SOLUTION may be `@path/to/file`. |
 | `create <PROJ> <TYPE> <SUMMARY> [DESC] [ASSIGNEE]` | Create a new issue (assignee defaults to `$JIRA_USER`) |
 | `transitions <KEY>` | List available status transitions and their IDs |
 | `transition <KEY> <ID> [comment]` | Change issue status (optionally with comment) |
@@ -83,3 +87,47 @@ curl -s --interface "$JIRA_INTERFACE" \
 ## Browse URL
 
 `http://39.106.86.136:8090/browse/{ISSUE_KEY}`
+
+## Bug-fix reply template
+
+After fixing a defect tracked by a Jira issue, post a structured reply with
+`fix-comment`. The template (see `templates/fix-reply.md`) has three sections,
+plus a PR link at the bottom:
+
+1. **问题触发条件** — minimal repro / when the bug fires
+2. **定位根因** — where in the code the defect lives and why
+3. **解决方案** — what changed and why (and the PR link is appended automatically)
+
+Each input is rendered into Jira wiki markup. Inside any section you can use
+`{{ident}}` for inline code and `{code:cpp} ... {code}` for code blocks.
+
+```bash
+# Inline literals (newlines inside the quoted string are preserved).
+bash ~/.claude/skills/jira/jira.sh fix-comment DORIS-25296 \
+    'https://github.com/apache/doris/pull/62699' \
+    'When ... ' \
+    'Function {{foo}} ignores ...' \
+    'Wrap result in {{ColumnConst}} ...'
+
+# Or read each section from a file (recommended for multi-line content):
+bash ~/.claude/skills/jira/jira.sh fix-comment DORIS-25296 \
+    'https://github.com/apache/doris/pull/62699' \
+    @/tmp/trigger.md @/tmp/cause.md @/tmp/solution.md
+```
+
+Trigger this command automatically once a fix PR is opened/merged and the
+related Jira key is known (e.g. mentioned in the PR description as
+`Related Jira: DORIS-XXXXX`).
+
+## VPN routing
+
+The Jira server (`39.106.86.136`) is only reachable through `tun0`. If your
+default route doesn't already cover it, add a host route once per session:
+
+```bash
+sudo ip route add 39.106.86.136 dev tun0
+```
+
+The script also sets `--noproxy '*'` and unsets every proxy env var
+(`HTTP(S)_PROXY`, `ALL_PROXY`) so SOCKS/HTTP proxies don't intercept the
+connection.

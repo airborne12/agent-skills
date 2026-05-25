@@ -4,6 +4,10 @@
 #   view <ISSUE_KEY>           - View issue details
 #   search <JQL>               - Search issues with JQL
 #   comment <ISSUE_KEY> <BODY> - Add comment to issue
+#   fix-comment <ISSUE_KEY> <PR_URL> <TRIGGER> <ROOT_CAUSE> <SOLUTION>
+#                              - Post bug-fix reply using the 3-section template.
+#                                Each of TRIGGER/ROOT_CAUSE/SOLUTION may be a
+#                                literal string or @path/to/file.
 #   create <PROJECT> <TYPE> <SUMMARY> [DESC] [ASSIGNEE] - Create issue
 #   transitions <ISSUE_KEY>    - List available transitions
 #   transition <ISSUE_KEY> <ID> [COMMENT] - Transition issue
@@ -11,12 +15,14 @@
 set -euo pipefail
 
 source ~/.jira.conf
-unset HTTP_PROXY http_proxy HTTPS_PROXY https_proxy 2>/dev/null || true
+# Clear every proxy var — ALL_PROXY/all_proxy in particular would route traffic
+# through SOCKS5 and stall once the VPN route is in place.
+unset HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy 2>/dev/null || true
 
 AUTH_HEADER="Authorization: Bearer $JIRA_TOKEN"
 
 jira_curl() {
-    curl -s -H "$AUTH_HEADER" "$@"
+    curl -s --noproxy '*' -H "$AUTH_HEADER" "$@"
 }
 
 cmd_view() {
@@ -86,6 +92,43 @@ if 'errorMessages' in d:
     print('Error:', '; '.join(d['errorMessages']))
     sys.exit(1)
 print(f'Comment added by {d[\"author\"][\"displayName\"]} at {d[\"created\"]}')
+"
+}
+
+cmd_fix_comment() {
+    local key="$1"
+    local pr_url="$2"
+    local trigger_in="$3"
+    local cause_in="$4"
+    local solution_in="$5"
+    local body
+    body=$(python3 -c "
+import json, sys, os
+def read(v):
+    if v.startswith('@'):
+        with open(os.path.expanduser(v[1:])) as f:
+            return f.read().rstrip()
+    return v
+trigger, cause, solution, pr_url = (read(sys.argv[i]) for i in (1,2,3,4))
+parts = [
+    'h3. 1. 问题触发条件', '', trigger, '',
+    'h3. 2. 定位根因',     '', cause,   '',
+    'h3. 3. 解决方案',     '', solution, '',
+    f'PR: {pr_url}',
+]
+print(json.dumps({'body': '\n'.join(parts)}))
+" "$trigger_in" "$cause_in" "$solution_in" "$pr_url")
+    jira_curl -X POST \
+        -H "Content-Type: application/json" \
+        -d "$body" \
+        "$JIRA_URL/rest/api/2/issue/$key/comment" \
+    | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+if 'errorMessages' in d:
+    print('Error:', '; '.join(d['errorMessages']))
+    sys.exit(1)
+print(f'Fix reply posted to {d[\"self\"].rsplit(\"/issue/\",1)[1].split(\"/\")[0]} (comment id {d[\"id\"]}) at {d[\"created\"]}')
 "
 }
 
@@ -171,6 +214,7 @@ case "${1:-help}" in
     view)        cmd_view "$2" ;;
     search)      cmd_search "$2" ;;
     comment)     cmd_comment "$2" "$3" ;;
+    fix-comment) cmd_fix_comment "$2" "$3" "$4" "$5" "$6" ;;
     create)      cmd_create "$2" "$3" "$4" "${5:-}" "${6:-}" ;;
     transitions) cmd_transitions "$2" ;;
     transition)  cmd_transition "$2" "$3" "${4:-}" ;;
@@ -179,6 +223,9 @@ case "${1:-help}" in
         echo "  view <KEY>                    - View issue details"
         echo "  search '<JQL>'                - Search with JQL"
         echo "  comment <KEY> '<body>'        - Add comment"
+        echo "  fix-comment <KEY> <PR_URL> <TRIGGER> <ROOT_CAUSE> <SOLUTION>"
+        echo "                                - Post bug-fix reply using the 3-section template."
+        echo "                                  Any of TRIGGER/ROOT_CAUSE/SOLUTION may be @file."
         echo "  create <PROJ> <TYPE> <SUMMARY> [DESC] [ASSIGNEE] - Create issue"
         echo "  transitions <KEY>             - List transitions"
         echo "  transition <KEY> <ID> [comment] - Do transition"
