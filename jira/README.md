@@ -26,23 +26,23 @@ JIRA_TOKEN='your_personal_access_token'   # Use single quotes
 
 ```bash
 # View an issue
-bash jira.sh view CIR-19418
+bash jira.sh view CIR-10005
 
 # Search issues
-bash jira.sh search 'project = CIR AND assignee = jiangkai ORDER BY updated DESC'
+bash jira.sh search 'project = CIR AND assignee = alice ORDER BY updated DESC'
 
 # Add a comment
-bash jira.sh comment CIR-19418 'Comment text here'
+bash jira.sh comment CIR-10005 'Comment text here'
 
 # Create an issue
 bash jira.sh create CIR Task 'Fix login bug'
 bash jira.sh create CIR Bug 'Login fails' 'Steps to reproduce...'
 
 # List available transitions
-bash jira.sh transitions CIR-19418
+bash jira.sh transitions CIR-10005
 
 # Transition an issue
-bash jira.sh transition CIR-19418 21
+bash jira.sh transition CIR-10005 21
 ```
 
 ## Files

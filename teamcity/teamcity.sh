@@ -8,7 +8,7 @@ CONF="${TEAMCITY_CONF:-$HOME/.teamcity.conf}"
 if [[ ! -f "$CONF" ]]; then
   echo "ERROR: Config file not found: $CONF"
   echo "Create it with:"
-  echo '  TEAMCITY_URL="http://43.132.222.7:8111"'
+  echo '  TEAMCITY_URL="http://teamcity.example.com:8111"'
   echo '  TEAMCITY_TOKEN="your_token_here"'
   exit 1
 fi
@@ -207,7 +207,7 @@ cmd_web() {
 # --- Doris Log Artifact Commands ---
 
 # OSS URL prefix for doris log archives
-OSS_LOG_URL_PREFIX="http://opensource-pipeline.oss-cn-hongkong.aliyuncs.com/regression"
+OSS_LOG_URL_PREFIX="http://ci-logs.example.com/regression"
 
 # Extract doris log archive URLs from build log
 # Log upload always happens near the end, so we use tail to avoid downloading the full log (200MB+)

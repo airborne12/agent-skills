@@ -1,0 +1,13 @@
+# ~/.jira-watch.conf —— jira-watch 技能参数（Jira 凭据在 ~/.jira.conf）。同名环境变量可覆盖。
+JIRA_WATCH_MODE="OBSERVE"                       # OBSERVE | INTERACT（INTERACT 只应由用户临时通过 --mode 开启）
+JIRA_WATCH_JQL="assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"
+JIRA_WATCH_REPO_DORIS="/path/to/doris"          # apache/doris 本地克隆（只读使用，会自动 fetch）
+JIRA_WATCH_REPO_INTERNAL="/path/to/internal-core"   # 与 doris 互相 pick 的内部仓库克隆
+JIRA_WATCH_DORIS_BRANCHES="master,branch-4.1,branch-4.0,branch-3.1,branch-3.0,branch-2.1"
+JIRA_WATCH_INTERNAL_BRANCHES="internal-cloud-4.0,branch-internal-doris-4.1,branch-internal-doris-4.0"
+JIRA_WATCH_BOT_USERS="aibot"            # AI 值班机器人的 Jira 用户名
+JIRA_WATCH_CI_BOT_USERS="cibot"      # 流水线巡检脚本的 Jira 用户名
+JIRA_WATCH_PROJECTS="CIR,DORIS,CORE"            # 只把这些项目的 key 当作 issue 引用
+JIRA_WATCH_ALLOWED_TRANSITIONS="处理中"          # 白名单之外的状态一律不流转
+JIRA_WATCH_LARK_OPEN_ID="ou_xxx"                # 飞书私聊接收人 open_id（lark-cli auth status 可查）
+JIRA_WATCH_FETCH_STALE_HOURS="6"
