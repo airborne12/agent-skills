@@ -14,7 +14,7 @@ Query TeamCity builds via REST API. Check build status by branch/PR, diagnose fa
 Credentials in `~/.teamcity.conf`:
 
 ```bash
-TEAMCITY_URL="http://43.132.222.7:8111"
+TEAMCITY_URL="http://teamcity.example.com:8111"
 TEAMCITY_TOKEN='your_token_here'
 # TEAMCITY_INTERFACE="tun0"    # Optional: VPN interface
 ```
@@ -51,6 +51,10 @@ bash ~/.claude/skills/teamcity/teamcity.sh <command> [args...]
 | `queue [config_id]` | Queued builds |
 | `running [config_id]` | Running builds |
 | `web <build_id>` | Print web URL for build |
+| `log-urls <build_id>` | Extract doris log archive URLs from build log |
+| `log-download <build_id> [dir]` | Download & extract doris log archives to local dir |
+| `log-cat <build_id> [pattern]` | Download, extract, and print matching log files |
+| `diagnose-logs <build_id>` | Full diagnosis + auto-fetch doris log archives |
 
 ## Typical Workflows
 
@@ -81,15 +85,69 @@ bash ~/.claude/skills/teamcity/teamcity.sh log-tail <build_id> 300
 
 ### Check PR pipeline (branch-based)
 
-TeamCity tracks PRs via branch names. For GitHub PRs, the branch name is typically `refs/pull/<number>/merge` or the source branch name:
+TeamCity tracks PRs via branch names. For Apache Doris PRs, use `pull/<number>`:
 
 ```bash
-# Try source branch name first
+# Doris PR (最常用)
+bash ~/.claude/skills/teamcity/teamcity.sh branch-builds "pull/59847"
+
+# Or try source branch name
 bash ~/.claude/skills/teamcity/teamcity.sh branch-builds feature/add-auth
 
 # Or try PR ref
 bash ~/.claude/skills/teamcity/teamcity.sh branch-builds "refs/pull/123/merge"
 ```
+
+### ⚠️ PR 流水线诊断原则
+
+**只看每种流水线类型的最新一条已完成构建**，不要分析所有历史构建。`branch-builds` 的输出按时间倒序排列，同一个 config_id 只关注第一条（最新的）。
+
+**关键：区分构建状态**
+- `state:finished` = 已完成，此时 `status` (SUCCESS/FAILURE) 才是最终结果
+- `state:running` = 正在运行中，**不能**将其 status 当作最终结果（可能显示 SUCCESS 但实际还没跑完）
+- 判断一个流水线是否通过，**必须以最新的已完成 (finished) 构建为准**，忽略正在运行中的构建
+- 如果最新的构建还在运行中，应报告为"运行中"而非成功/失败，同时以上一个已完成构建的结果作为当前已知状态
+
+诊断流程：
+1. `branch-builds "pull/<PR号>"` 获取所有构建
+2. **每种流水线只看最新的一条已完成构建**（按 config_id 去重，跳过 running/queued 状态）
+3. 如有正在运行的构建，额外用 `running` 命令确认，并在报告中标注
+4. 对失败的最新已完成构建执行 `diagnose <build_id>`
+5. 分类：代码问题 vs CI 基础设施问题
+
+**常见 CI 基础设施问题（非代码问题）：**
+- Docker 容器异常退出（退出码 8）、`build.log` 找不到 → 重试即可
+- `git submodule update` 在 merge PR 之前运行 → submodule 引用不匹配
+- 网络超时、Maven 下载失败 → 重试
+- Agent 磁盘空间不足 → CI 团队处理
+
+### Deep-dive into failed build with doris logs
+
+When `diagnose` doesn't provide enough info (e.g., you need FE/BE logs, regression test logs, or coredump info):
+
+```bash
+# One-command: full diagnosis + doris log archives
+bash ~/.claude/skills/teamcity/teamcity.sh diagnose-logs <build_id>
+
+# Or step by step:
+# 1. Check if log archives exist
+bash ~/.claude/skills/teamcity/teamcity.sh log-urls <build_id>
+
+# 2. Download and extract to local dir
+bash ~/.claude/skills/teamcity/teamcity.sh log-download <build_id>
+
+# 3. Read specific log files
+bash ~/.claude/skills/teamcity/teamcity.sh log-cat <build_id> "fe.log"
+bash ~/.claude/skills/teamcity/teamcity.sh log-cat <build_id> "be.out"
+bash ~/.claude/skills/teamcity/teamcity.sh log-cat <build_id> "*.WARNING"
+```
+
+**How doris log archives work:**
+- When a regression pipeline fails, it packages FE/BE logs, configs, and regression test logs into a `.tar.gz`
+- The archive is uploaded to OSS: `http://ci-logs.example.com/regression/`
+- The download URL is printed in the build log
+- Archive typically contains: `fe/log/`, `be/log/`, `fe/conf/`, `be/conf/`, `regression-test/log/`, `dmesg.log`
+- Coredump archives may also be available (named `*_doris_coredump.tar.gz`)
 
 ## REST API Reference (manual curl)
 
@@ -126,6 +184,9 @@ Key endpoints:
 
 | Mistake | Fix |
 |---------|-----|
+| 分析了所有历史构建而非最新的 | **每种流水线只看最新一条已完成构建**，按 config_id 去重 |
+| 把正在运行的构建当作已完成 | `state:running` 的构建 status 不是最终结果，**必须以 `state:finished` 的构建为准**。用 `running` 命令确认是否有进行中的构建 |
+| 把 CI 基础设施问题当成代码问题 | Docker 退出码非 0/1、build.log 缺失、网络超时 → 重试，非代码问题 |
 | Only seeing default branch builds | Add `defaultFilter:false` to locator |
 | Branch not found | Try exact branch name from VCS, including `refs/...` prefix |
 | 401 Unauthorized | Check token in `~/.teamcity.conf`, ensure single quotes around token |
@@ -193,7 +254,7 @@ $TC log <build_id> | grep -i "core file http"
 
 This typically prints URLs like:
 ```
-http://opensource-pipeline.oss-cn-hongkong.aliyuncs.com/regression/OpenSourcePiplineRegression_<timestamp>_<pr>_<commit>_<pipeline>.tar.gz
+http://ci-logs.example.com/regression/OpenSourcePiplineRegression_<timestamp>_<pr>_<commit>_<pipeline>.tar.gz
 ```
 
 Download and extract the archive:

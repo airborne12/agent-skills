@@ -1,0 +1,43 @@
+{
+  "skill_name": "doris-tdd-pr-workflow",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "A Doris fix was implemented before its regression test under deadline pressure. Choose whether to keep it or restart, then specify every evidence gate through PR creation.",
+      "expected_output": "Restarts test-first, proves RED and GREEN with real Doris commands, formats with repository scripts, verifies, self-reviews, pushes to jk, and creates a Doris-template PR.",
+      "files": [],
+      "expectations": [
+        "Chooses to discard implementation written before a failing regression test and restart test-first.",
+        "Requires a focused real-case test to fail for the expected bug reason before production code changes.",
+        "Uses Doris repository test/build scripts and both build-support/clang-format.sh and build-support/check-format.sh.",
+        "Requires fresh verification and self-review before committing or creating the PR.",
+        "Pushes the isolated branch to remote jk and uses the official Apache Doris PR description structure."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Two independent Doris fixes face deadline pressure to combine. Choose the branch/PR topology and specify setup through submission.",
+      "expected_output": "Creates two isolated worktrees/branches from the latest upstream master and takes each independently through TDD, formatting, verification, jk push, and its own PR.",
+      "files": [],
+      "expectations": [
+        "Rejects combining or stacking independent fixes and chooses one isolated branch/worktree and PR per task.",
+        "Fetches the upstream master and bases both branches independently on its resolved latest commit.",
+        "Preserves unrelated dirty changes and follows worktree initialization instructions.",
+        "Runs a separate RED-GREEN cycle, verification, commit, jk push, and Doris-template PR for each task."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "A newly opened Doris PR has running checks, historical failures, one latest finished failure, and an unproven review comment. Decide the exact post-PR gates.",
+      "expected_output": "Does not treat running status as final, waits for format/compile gates before run buildall, diagnoses only latest finished builds against current SHA, and reproduces review claims before fixing them via TDD.",
+      "files": [],
+      "expectations": [
+        "Does not post run buildall until required initial format and compilation checks are finished and successful for the current SHA.",
+        "Treats running or queued builds separately and analyzes only the latest finished build per TeamCity configuration.",
+        "Compares failing build revision and failure scope with the current PR before classifying code-related versus infrastructure or stale failure.",
+        "Summarizes the review comment, independently reproduces it, judges validity, records a task, and only then makes a TDD fix if confirmed.",
+        "Continues monitoring new pipeline results and unresolved review threads without declaring readiness prematurely."
+      ]
+    }
+  ]
+}
