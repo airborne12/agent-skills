@@ -1,0 +1,4 @@
+interface:
+  display_name: "ASD-STE100 Technical Explanation"
+  short_description: "Explain PRs and bugs with evidence and plain language"
+  default_prompt: "Use $asd-ste100-explain to explain this PR: its trigger, cause, user impact, and fix."
